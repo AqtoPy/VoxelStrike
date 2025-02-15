@@ -1,27 +1,40 @@
 extends Node
 
-var players = {}
+enum GameMode {FFA, TDM, CTF}
+var current_map: String
+var current_mode: GameMode
 
-func _ready():
-    multiplayer.peer_connected.connect(_on_peer_connected)
-    multiplayer.peer_disconnected.connect(_on_peer_disconnected)
-
-func _on_peer_connected(id: int):
-    var player = preload("res://player.tscn").instantiate()
-    player.name = str(id)
-    add_child(player)
+func start_host(map_path: String, mode: int):
+    # Загрузка карты
+    var map_scene = load(map_path)
+    var map_instance = map_scene.instantiate()
+    get_tree().root.add_child(map_instance)
     
-    if player.player_name in players.values():
-        kick_player(id, "Name already exists")
+    # Настройка сервера
+    var peer = ENetMultiplayerPeer.new()
+    peer.create_server(Global.PORT)
+    multiplayer.multiplayer_peer = peer
+    
+    # Инициализация режима
+    current_mode = mode
+    current_map = map_path
+    
+    # Синхронизация с клиентами
+    sync_game_settings.rpc(map_path, mode)
+
+@rpc("call_local")
+func sync_game_settings(map: String, mode: int):
+    current_map = map
+    current_mode = mode
+    # Загрузка карты для клиентов
+    if !FileAccess.file_exists(map):
+        push_error("Map file not found!")
         return
         
-    players[id] = player.player_name
+    var map_scene = load(map)
+    get_tree().root.get_child(0).queue_free()
+    get_tree().root.add_child(map_scene.instantiate())
 
-func _on_peer_disconnected(id: int):
-    if players.has(id):
-        players.erase(id)
-
-func kick_player(id: int, reason: String):
-    var peer = multiplayer.multiplayer_peer as ENetMultiplayerPeer
-    peer.disconnect_peer(id, true)
-    print("Kicked player %d: %s" % [id, reason])
+func _on_peer_connected(id: int):
+    # Отправляем новые игрокам настройки
+    sync_game_settings.rpc_id(id, current_map, current_mode)
